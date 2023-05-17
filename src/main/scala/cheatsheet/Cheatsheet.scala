@@ -10,6 +10,9 @@ import cats.effect.kernel.Outcome
 import cats.instances.list.*
 import cats.effect.kernel.Outcome.{Canceled, Errored, Succeeded}
 import cats.effect.std.Semaphore
+import cats.effect.std.CountDownLatch
+import cats.effect.std.CyclicBarrier
+
 
 
 import java.io.{File, FileReader}
@@ -305,7 +308,6 @@ object Cheatsheet {
     }
   }
 
-
   def mutex() = {
 
 
@@ -362,6 +364,61 @@ object Cheatsheet {
     }
   }
 
+  def countdownlatches() = {
+    // Basic example
+    def runnerExampleForCountdownLatcher() = {
+      def announcer(latch: CountDownLatch[IO]): IO[Unit] = for {
+        _ <- IO("Starting race shortly...").debug >> IO.sleep(2.seconds)
+        _ <- IO("5...").debug >> IO.sleep(1.second)
+        _ <- latch.release
+        _ <- IO("4...").debug >> IO.sleep(1.second)
+        _ <- latch.release
+        _ <- IO("3...").debug >> IO.sleep(1.second)
+        _ <- latch.release
+        _ <- IO("2...").debug >> IO.sleep(1.second)
+        _ <- latch.release
+        _ <- IO("1...").debug >> IO.sleep(1.second)
+        _ <- IO("GO GO GO!").debug
+        _ <- latch.release // gun firing
+      } yield ()
+
+      def createRunner(id: Int, latch: CountDownLatch[IO]): IO[Unit] = for {
+        _ <- IO(s"[runner $id] waiting for signal...").debug
+        _ <- latch.await // block this fiber until the count reaches 0
+        _ <- IO(s"[runner $id] RUNNING!").debug
+      } yield ()
+
+      def sprint(): IO[Unit] = for {
+        latch <- CountDownLatch[IO](5)
+        announcerFib <- announcer(latch).start
+        _ <- (1 to 10).toList.parTraverse(id => createRunner(id, latch))
+        _ <- announcerFib.join
+      } yield ()
+
+    }
+
+
+  }
+
+  def cyclicbarriers() = {
+    // Basic Example: signing up for waitlist, it is needed 10 person to launch each time
+    def barriersExample() = {
+      def createUser(id: Int, barrier: CyclicBarrier[IO]): IO[Unit] = for {
+        _ <- IO.sleep((Random.nextDouble * 500).toInt.millis)
+        _ <- IO(s"[user $id] Just heard there's a new social network - signing up for the waitlist...").debug
+        _ <- IO.sleep((Random.nextDouble * 1500).toInt.millis)
+        _ <- IO(s"[user $id] On the waitlist now, can't wait!").debug
+        _ <- barrier.await // block the fiber when there are exactly N users waiting
+        _ <- IO(s"[user $id] OMG this is so cool!").debug
+      } yield ()
+
+      def openNetwork(): IO[Unit] = for {
+        _ <- IO("[announcer] The social network is up for registration! Launching when we have 10 users!").debug
+        barrier <- CyclicBarrier[IO](10)
+        _ <- (1 to 20).toList.parTraverse(id => createUser(id, barrier))
+      } yield ()
+    }
+  }
 
 
 
