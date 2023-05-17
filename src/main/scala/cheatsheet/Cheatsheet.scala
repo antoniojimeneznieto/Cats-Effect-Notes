@@ -9,6 +9,8 @@ import cats.syntax.traverse.*
 import cats.effect.kernel.Outcome
 import cats.instances.list.*
 import cats.effect.kernel.Outcome.{Canceled, Errored, Succeeded}
+import cats.effect.std.Semaphore
+
 
 import java.io.{File, FileReader}
 import java.util.Scanner
@@ -307,6 +309,58 @@ object Cheatsheet {
   def mutex() = {
 
   }
+
+  def semaphores() = {
+    // Create a Semaphore
+    val semaphore: IO[Semaphore[IO]] = Semaphore[IO](2) // 2 total permits
+
+    // Basic example using Semaphore
+    def demoUsingSemaphore() = {
+      def doWorkWhileLoggedIn(): IO[Int] = IO.sleep(1.second) >> IO(Random.nextInt(100))
+      def weightedLogin(id: Int, requiredPermits: Int, sem: Semaphore[IO]): IO[Int] = for {
+        _ <- IO(s"[session $id] waiting to log in...").debug
+        _ <- sem.acquireN(requiredPermits) // acquire N permits
+        // critical section
+        _ <- IO(s"[session $id] logged in, working...").debug
+        res <- doWorkWhileLoggedIn()
+        _ <- IO(s"[session $id] done: $res, logging out...").debug
+        // end of critical section
+        _ <- sem.releaseN(requiredPermits) // Release N permits
+      } yield res
+
+      for {
+        sem <- Semaphore[IO](2)
+        user1Fib <- weightedLogin(1, 1, sem).start
+        user2Fib <- weightedLogin(1, 2, sem).start
+        user3Fib <- weightedLogin(1, 1, sem).start
+        _ <- user1Fib.join
+        _ <- user2Fib.join
+        _ <- user3Fib.join
+      } yield ()
+    }
+
+    // Parallel Semaphore
+    def demoUsingSemaphoreInParallel() = {
+      def doWorkWhileLoggedIn(): IO[Int] = IO.sleep(1.second) >> IO(Random.nextInt(100))
+      val mutex = Semaphore[IO](1)
+
+      val numbers = mutex.flatMap { sem =>
+        (1 to 10).toList.parTraverse { id =>
+          for {
+            _ <- IO(s"[session $id] waiting to log in...").debug
+            _ <- sem.acquire
+            // critical section
+            _ <- IO(s"[session $id] logged in, working...").debug
+            res <- doWorkWhileLoggedIn()
+            _ <- IO(s"[session $id] done: $res, logging out...").debug
+            // end of critical section
+            _ <- sem.release
+          } yield res
+        }
+      }
+    }
+  }
+  
 
 
 
