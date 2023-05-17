@@ -308,6 +308,7 @@ object Cheatsheet {
 
   def mutex() = {
 
+
   }
 
   def semaphores() = {
@@ -344,7 +345,7 @@ object Cheatsheet {
       def doWorkWhileLoggedIn(): IO[Int] = IO.sleep(1.second) >> IO(Random.nextInt(100))
       val mutex = Semaphore[IO](1)
 
-      val numbers = mutex.flatMap { sem =>
+      val numbers = mutex.flatMap { sem => // otherwise we just create a new Semaphore for each fiber
         (1 to 10).toList.parTraverse { id =>
           for {
             _ <- IO(s"[session $id] waiting to log in...").debug
@@ -360,7 +361,7 @@ object Cheatsheet {
       }
     }
   }
-  
+
 
 
 
