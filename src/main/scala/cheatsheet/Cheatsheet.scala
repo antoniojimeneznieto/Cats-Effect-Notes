@@ -13,8 +13,6 @@ import cats.effect.std.Semaphore
 import cats.effect.std.CountDownLatch
 import cats.effect.std.CyclicBarrier
 
-
-
 import java.io.{File, FileReader}
 import java.util.Scanner
 
@@ -211,6 +209,14 @@ object Cheatsheet {
       println(s"[${Thread.currentThread().getName}] computed a blocking code")
       100
     } // will evaluate on a thread from ANOTHER thread pool specific for blocking calls
+
+    val iosOnManyThreads = for {
+      _ <- IO("first").debug
+      _ <- IO.cede // a signal to yield control over the thread - equivalent to IO.shift from CE2
+      _ <- IO("second").debug // the rest of this effect may run on another thread (not necessarily)
+      _ <- IO.cede
+      _ <- IO("third").debug
+    } yield ()
 
   }
 
