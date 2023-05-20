@@ -15,11 +15,14 @@ import cats.effect.std.CyclicBarrier
 
 import java.io.{File, FileReader}
 import java.util.Scanner
-
 import scala.concurrent.duration.*
 import scala.io.StdIn
 import scala.util.Random
 import util.debug
+
+import java.util.concurrent.Executors
+import scala.concurrent.{ExecutionContext, Future}
+import scala.util.Try
 
 object Cheatsheet {
 
@@ -221,6 +224,71 @@ object Cheatsheet {
   }
 
   def async() = {
+    // IOs can run asynchronously on fibers, without having to manually manage the fiber lifecycle
+    val threadPool = Executors.newFixedThreadPool(8)
+    implicit val ec: ExecutionContext = ExecutionContext.fromExecutorService(threadPool)
+    type Callback[A] = Either[Throwable, A] => Unit
+
+    def computation(): Either[Throwable, Int] = Try {
+      Thread.sleep(1000)
+      println(s"[${Thread.currentThread().getName}] computing the meaning of life on some other thread...")
+      100
+    }.toEither
+
+    def computeOnThreadPool(): Unit = threadPool.execute(() => computation())
+
+    // Lift the computation to an IO:
+    val asyncIO: IO[Int] = IO.async_ { (cb: Callback[Int]) => // CE thread blocks (semantically) until this cb is invoked (by some other thread)
+      threadPool.execute { () => // computation not managed by CE
+        val result = computation()
+        cb(computation()) // CE thread is notified with the result
+      }
+    }
+
+    // Lift an async computation (Future) to an IO:
+    def convertFutureToIO[A](future: => Future[A]): IO[A] =
+      IO.async_ { (cb: Callback[A]) =>
+        future.onComplete { tryResult =>
+          val result = tryResult.toEither
+          cb(result)
+        }
+      }
+    lazy val aFuture: Future[Int] = Future {
+      Thread.sleep(1000)
+      println(s"[${Thread.currentThread().getName}] computing the meaning of life on some other thread...")
+      42
+    }
+    val asyncIOFromFuture: IO[Int] = convertFutureToIO(aFuture)
+    val asyncIOFromFuture_v2: IO[Int] = IO.fromFuture(IO(aFuture))
+
+    // Never ending IO:
+    val neverEndingIO: IO[Int] = IO.async_[Int](_ => ()) // no callback, no finish
+    val neverEndingIO_v2: IO[Int] = IO.never
+
+    // FULL ASYNC Call
+    def demoAsyncCancellation() = {
+      val asyncMeaningOfLifeIO_v2: IO[Int] = IO.async { (cb: Callback[Int]) => // async block ce thread until it receives the callback
+        /*
+          finalizer in case computation gets cancelled.
+          finalizers are of type IO[Unit]
+          not specifying finalizer => Option[IO[Unit]]
+          creating option is an effect => IO[Option[IO[Unit]]]
+         */
+        // return IO[Option[IO[Unit]]]
+        IO {
+          threadPool.execute { () =>
+            val result = computation()
+            cb(result)
+          }
+        }.as(Some(IO("Cancelled!").debug.void))
+      }
+
+      for {
+        fib <- asyncMeaningOfLifeIO_v2.start
+        _ <- IO.sleep(500.millis) >> IO("cancelling...").debug >> fib.cancel
+        _ <- fib.join
+      } yield ()
+    }
 
   }
 
