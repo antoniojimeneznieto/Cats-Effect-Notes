@@ -12,6 +12,9 @@ import cats.effect.kernel.Outcome.{Canceled, Errored, Succeeded}
 import cats.effect.std.Semaphore
 import cats.effect.std.CountDownLatch
 import cats.effect.std.CyclicBarrier
+import cats.{Applicative, Functor, Monad}
+import cats.effect.MonadCancel
+import cats.effect.Poll
 
 import java.io.{File, FileReader}
 import java.util.Scanner
@@ -492,6 +495,28 @@ object Cheatsheet {
         _ <- (1 to 20).toList.parTraverse(id => createUser(id, barrier))
       } yield ()
     }
+  }
+
+  def polymorphicCancellation() = {
+    import cats.syntax.flatMap._ // flatMap
+    import cats.syntax.functor._ // map
+
+    val monadCancelIO: MonadCancel[IO, Throwable] = MonadCancel[IO]
+
+    // goal: can generalize code
+    def mustComputeGeneral[F[_], E](using mc: MonadCancel[F, E]): F[Int] = mc.uncancelable { _ =>
+      for {
+        _ <- mc.pure("once started, I can't go back...")
+        res <- mc.pure(56)
+      } yield res
+    }
+
+    val mustCompute_v2 = mustComputeGeneral[IO, Throwable]
+    mustCompute_v2.onCancel(IO("I was cancelled!").void)
+
+    // bracket pattern is specific to MonadCancel
+    // therefore Resources can only be built in the presence of a MonadCancel instance
+
   }
 
 
