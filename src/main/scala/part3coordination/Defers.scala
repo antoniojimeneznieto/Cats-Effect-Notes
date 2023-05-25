@@ -2,7 +2,7 @@ package part3coordination
 
 import cats.effect.kernel.Outcome
 import cats.effect.{Deferred, Fiber, IO, IOApp, Ref}
-import cheatsheet.util.debug
+import cheatsheet.util._
 
 import scala.concurrent.duration._
 import cats.syntax.traverse._
