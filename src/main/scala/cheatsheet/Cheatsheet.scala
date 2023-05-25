@@ -1,6 +1,6 @@
 package cheatsheet
 
-import cats.effect.{Deferred, Fiber, IO, IOApp, Outcome, Ref, Resource}
+import cats.effect.{Concurrent, Deferred, Fiber, IO, IOApp, MonadCancel, Outcome, Poll, Ref, Resource, Spawn}
 import cats.effect.implicits.*
 import cats.syntax.apply.*
 import cats.syntax.parallel.*
@@ -13,8 +13,6 @@ import cats.effect.std.Semaphore
 import cats.effect.std.CountDownLatch
 import cats.effect.std.CyclicBarrier
 import cats.{Applicative, Functor, Monad}
-import cats.effect.MonadCancel
-import cats.effect.Poll
 
 import java.io.{File, FileReader}
 import java.util.Scanner
@@ -498,10 +496,33 @@ object Cheatsheet {
   }
 
   def polymorphicCancellation() = {
+    //MonadCancel extends from MonadError which extends from Monad and ApplicativeError which extends Applicative
+    trait MyApplicativeError[F[_], E] extends Applicative[F] {
+      def raiseError[A](error: E): F[A]
+      def handleErrorWith[A](fa: F[A])(f: E => F[A]): F[A]
+    }
+    trait MyMonadError[F[_], E] extends MyApplicativeError[F, E] with Monad[F]
+    trait MyMonadCancel[F[_], E] extends MyMonadError[F, E] {
+      def canceled: F[Unit]
+      def uncancelable[A](poll: Poll[F] => F[A]): F[A]
+    }
+
     import cats.syntax.flatMap._ // flatMap
     import cats.syntax.functor._ // map
 
+    // MonadCancel describes the capability to cancel & prevent cancellation
     val monadCancelIO: MonadCancel[IO, Throwable] = MonadCancel[IO]
+
+    // We can create values, because MonadCancel is a Monad
+    val molIO: IO[Int] = monadCancelIO.pure(100)
+    val ambitiousMolIO: IO[Int] = monadCancelIO.map(molIO)(_ * 10)
+
+    val mustCompute = monadCancelIO.uncancelable { _ =>
+      for {
+        _ <- monadCancelIO.pure("once started...")
+        res <- monadCancelIO.pure(56)
+      } yield res
+    }
 
     // goal: can generalize code
     def mustComputeGeneral[F[_], E](using mc: MonadCancel[F, E]): F[Int] = mc.uncancelable { _ =>
@@ -511,11 +532,114 @@ object Cheatsheet {
       } yield res
     }
 
+    // allow cancellation listeners
+    val mustComputeWithListener = mustCompute.onCancel(IO("I'm being cancelled!").void)
+    val mustComputeWithListener_v2 = monadCancelIO.onCancel(mustCompute, IO("I'm being cancelled!").void) // same
+    import cats.effect.syntax.monadCancel._ // .onCancel
+
     val mustCompute_v2 = mustComputeGeneral[IO, Throwable]
     mustCompute_v2.onCancel(IO("I was cancelled!").void)
 
+    // allow finalizers: guarantee, guaranteeCase
+    val aComputationWithFinalizers = monadCancelIO.guaranteeCase(IO(42)) {
+      case Succeeded(fa) => fa.flatMap(a => IO(s"successful: $a").void)
+      case Errored(e) => IO(s"failed: $e").void
+      case Canceled() => IO("canceled").void
+    }
+
     // bracket pattern is specific to MonadCancel
     // therefore Resources can only be built in the presence of a MonadCancel instance
+    val aComputationWithUsage = monadCancelIO.bracket(IO(42)) { value =>
+      IO(s"Using the meaning of life: $value")
+    } { value =>
+      IO("releasing the meaning of life...").void
+    }
+  }
+
+  def polymorphicFibers() = {
+    // Spawn = create fibers for any effect
+    trait MyGenSpawn[F[_], E] extends MonadCancel[F, E] {
+      def start[A](fa: F[A]): F[Fiber[F, Throwable, A]] // creates a fiber
+      def never[A]: F[A] // a forever-suspending effect
+      def cede: F[Unit] // a "yield" effect
+
+      def racePair[A, B](fa: F[A], fb: F[B]): F[Either[ // fundamental racing
+        (Outcome[F, E, A], Fiber[F, E, B]),
+        (Fiber[F, E, A], Outcome[F, E, B])
+      ]]
+    }
+    trait MySpawn[F[_]] extends MyGenSpawn[F, Throwable]
+
+    import cats.effect.syntax.spawn._ // start extension method
+    import cats.syntax.functor._ // map
+    import cats.syntax.flatMap._ // flatMap
+
+    // capabilities: pure, map/flatMap, raiseError, uncancelable, start
+    val spawnIO = Spawn[IO] // fetch the given/implicit Spawn[IO]
+    def ioOnSomeThread[A](io: IO[A]): IO[Outcome[IO, Throwable, A]] = for {
+      fib <- spawnIO.start(io) // io.start assumes the presence of a Spawn[IO]
+      result <- fib.join
+    } yield result
+
+    // We generalize:
+    def effectOnSomeThread[F[_], A](fa: F[A])(implicit spawn: Spawn[F]): F[Outcome[F, Throwable, A]] = for {
+      fib <- fa.start
+      result <- fib.join
+    } yield result
+
+    val myIO = IO.pure(100)
+    val molOnFiber = ioOnSomeThread(myIO)
+    val molOnFiber_v2 = effectOnSomeThread(myIO) // same
+
+  }
+
+  def polymorphicCoordination() = {
+    // Concurrent - Ref + Deferred for ANY effect type
+    trait MyConcurrent[F[_]] extends Spawn[F] {
+      def ref[A](a: A): F[Ref[F, A]]
+      def deferred[A]: F[Deferred[F, A]]
+    }
+
+    val concurrentIO = Concurrent[IO] // given instance of Concurrent[IO]
+    val aDeferred = Deferred[IO, Int] // given/implicit Concurrent[IO] in scope
+    val aDeferred_v2 = concurrentIO.deferred[Int]
+    val aRef = concurrentIO.ref(42)
+
+    // capabilities: pure, map/flatMap, raiseError, uncancelable, start (fibers), + ref/deferred
+
+    import cats.syntax.flatMap._ // flatMap
+    import cats.syntax.functor._ // map
+    import cats.effect.syntax.spawn._ // start extension method
+
+    import cheatsheet.util._
+    import scala.concurrent.duration._
+
+    def polymorphicEggBoiler[F[_]](using concurrent: Concurrent[F]): F[Unit] = {
+      def unsafeSleepDupe[F[_], E](duration: FiniteDuration)(using mc: MonadCancel[F, E]): F[Unit] =
+        mc.pure(Thread.sleep(duration.toMillis))
+        
+      def eggReadyNotification(signal: Deferred[F, Unit]) = for {
+        _ <- concurrent.pure("Egg boiling on some other fiber, waiting...").debug
+        _ <- signal.get
+        _ <- concurrent.pure("EGG READY!").debug
+      } yield ()
+
+      def tickingClock(counter: Ref[F, Int], signal: Deferred[F, Unit]): F[Unit] = for {
+        _ <- unsafeSleepDupe[F, Throwable](1.second)
+        count <- counter.updateAndGet(_ + 1)
+        _ <- concurrent.pure(count).debug
+        _ <- if (count >= 10) signal.complete(()).void else tickingClock(counter, signal)
+      } yield ()
+
+      for {
+        counter <- concurrent.ref(0)
+        signal <- concurrent.deferred[Unit]
+        notificationFib <- eggReadyNotification(signal).start
+        clock <- tickingClock(counter, signal).start
+        _ <- notificationFib.join
+        _ <- clock.join
+      } yield ()
+    }
 
   }
 
@@ -534,4 +658,16 @@ object util {
       t = Thread.currentThread().getName
       _ = println(s"[$t] $a")
     } yield a
+
+  import cats.Functor
+  import cats.syntax.functor.*
+  extension [F[_], A](fa: F[A]) {
+    def debug(using functor: Functor[F]): F[A] = fa.map { a =>
+      val t = Thread.currentThread().getName
+      println(s"[$t] $a")
+      a
+    }
+  }
 }
+
+
