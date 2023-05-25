@@ -1,6 +1,6 @@
 package cheatsheet
 
-import cats.effect.{Concurrent, Deferred, Fiber, IO, IOApp, MonadCancel, Outcome, Poll, Ref, Resource, Spawn}
+import cats.effect.{Concurrent, Deferred, Fiber, IO, IOApp, MonadCancel, Outcome, Poll, Ref, Resource, Spawn, Temporal}
 import cats.effect.implicits.*
 import cats.syntax.apply.*
 import cats.syntax.parallel.*
@@ -617,7 +617,7 @@ object Cheatsheet {
     def polymorphicEggBoiler[F[_]](using concurrent: Concurrent[F]): F[Unit] = {
       def unsafeSleepDupe[F[_], E](duration: FiniteDuration)(using mc: MonadCancel[F, E]): F[Unit] =
         mc.pure(Thread.sleep(duration.toMillis))
-        
+
       def eggReadyNotification(signal: Deferred[F, Unit]) = for {
         _ <- concurrent.pure("Egg boiling on some other fiber, waiting...").debug
         _ <- signal.get
@@ -641,6 +641,22 @@ object Cheatsheet {
       } yield ()
     }
 
+  }
+
+  def polymorphicTemporalSuspension() = {
+    // Temporal - time-blocking effects
+    trait MyTemporal[F[_]] extends Concurrent[F] {
+      def sleep(time: FiniteDuration): F[Unit] // semantically blocks this fiber for a specified time
+    }
+
+    // Capabilities: pure, map/flatMap, raiseError, uncancelable, start, ref/deferred, +sleep
+    val temporalIO = Temporal[IO] // given Temporal[IO] in scope
+    val chainOfEffects = IO("Loading...").debug *> IO.sleep(1.second) *> IO("Game ready!").debug
+    val chainOfEffects_v2 = temporalIO.pure("Loading...").debug *> temporalIO.sleep(1.second) *> temporalIO.pure("Game ready!").debug // same
+  }
+  
+  def polymorphicSync() = {
+    
   }
 
 

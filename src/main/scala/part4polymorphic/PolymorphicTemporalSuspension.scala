@@ -14,7 +14,7 @@ object PolymorphicTemporalSuspension extends IOApp.Simple {
     def sleep(time: FiniteDuration): F[Unit] // semantically blocks this fiber for a specified time
   }
 
-  // abilites: pure, map/flatMap, raiseError, uncancelable, start, ref/deferred, +sleep
+  // Capabilities: pure, map/flatMap, raiseError, uncancelable, start, ref/deferred, +sleep
   val temporalIO = Temporal[IO] // given Temporal[IO] in scope
   val chainOfEffects = IO("Loading...").debug *> IO.sleep(1.second) *> IO("Game ready!").debug
   val chainOfEffects_v2 = temporalIO.pure("Loading...").debug *> temporalIO.sleep(1.second) *> temporalIO.pure("Game ready!").debug // same
